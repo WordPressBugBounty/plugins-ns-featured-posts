@@ -131,7 +131,7 @@ class Notice {
 	 *
 	 * @since 1.0.0
 	 *
-	 * @return Notice
+	 * @return Notice|null
 	 */
 	public static function init( $args ) {
 		static $notices = [];
@@ -185,9 +185,6 @@ class Notice {
 			case 'theme':
 				$url = 'https://wordpress.org/support/theme/' . $this->slug . '/reviews/#new-post';
 				break;
-
-			default:
-				break;
 		}
 
 		return $url;
@@ -232,7 +229,7 @@ class Notice {
 	 */
 	public function render() {
 		// Bail if not valid.
-		if ( ! $this->can_show() && ! empty( $this->message ) ) {
+		if ( ! $this->can_show() || empty( $this->message ) ) {
 			return;
 		}
 		?>
@@ -253,8 +250,8 @@ class Notice {
 	 * @return bool True if it's time to show notice.
 	 */
 	protected function is_time_to_show() {
-		// Get the notice time.
-		$time = get_site_option( $this->key( 'time' ) );
+		// Get the notice time. Stored per-site so each site counts its own usage.
+		$time = get_option( $this->key( 'time' ) );
 
 		$current_time      = current_datetime();
 		$current_timestamp = $current_time->getTimestamp();
@@ -268,7 +265,7 @@ class Notice {
 			$time = $new_target_date->getTimestamp();
 
 			// Set to future.
-			update_site_option( $this->key( 'time' ), $time );
+			update_option( $this->key( 'time' ), $time );
 
 			return false;
 		}
@@ -289,7 +286,7 @@ class Notice {
 		$current_user = wp_get_current_user();
 
 		// Check if current item is dismissed.
-		return (bool) get_user_meta( $current_user->ID, $this->key( 'dismissed' ), true );
+		return (bool) get_user_meta( $current_user->ID, $this->dismissed_key(), true );
 	}
 
 	/**
@@ -356,8 +353,7 @@ class Notice {
 	 */
 	protected function get_message() {
 		$message = sprintf(
-			/* translators: 1: Name, 2: Days. */
-			esc_html__( 'Hello! Seems like you have been using %1$s for more than %2$d days - that\'s awesome! Could you please do us a BIG favor and give it a 5-star rating on WordPress? This would boost our motivation and help us spread the word.', 'wp-admin-notice' ),
+			'Hello! Seems like you have been using %1$s for more than %2$d days - that\'s awesome! Could you please do us a BIG favor and give it a 5-star rating on WordPress? This would boost our motivation and help us spread the word.',
 			'<strong>' . esc_html( $this->name ) . '</strong>',
 			(int) $this->days
 		);
@@ -393,8 +389,10 @@ class Notice {
 	 * @return void
 	 */
 	protected function process_actions() {
-		// Only if required.
-		if ( ! $this->in_screen() || ! $this->is_capable() ) {
+		// Only if required. Screen is intentionally not checked here: the current
+		// screen is not yet set at admin_init when actions are processed, and the
+		// nonce already authorizes the action.
+		if ( ! $this->is_capable() ) {
 			return;
 		}
 
@@ -423,12 +421,12 @@ class Notice {
 
 					$time = $new_target_date->getTimestamp();
 
-					update_site_option( $this->key( 'time' ), $time );
+					update_option( $this->key( 'time' ), $time );
 					break;
 
 				case 'dismiss':
 					// Do not show again to this user.
-					update_user_meta( get_current_user_id(), $this->key( 'dismissed' ), true );
+					update_user_meta( get_current_user_id(), $this->dismissed_key(), true );
 					break;
 			}
 		}
@@ -467,9 +465,9 @@ class Notice {
 		$this->action_labels = wp_parse_args(
 			(array) $args['action_labels'],
 			[
-				'review'  => esc_html__( 'Ok, you deserve it', 'wp-admin-notice' ),
-				'later'   => esc_html__( 'Nope, maybe later', 'wp-admin-notice' ),
-				'dismiss' => esc_html__( 'I already did', 'wp-admin-notice' ),
+				'review'  => 'Ok, you deserve it',
+				'later'   => 'Nope, maybe later',
+				'dismiss' => 'I already did',
 			]
 		);
 
@@ -498,5 +496,20 @@ class Notice {
 	 */
 	private function key( $key ) {
 		return $this->prefix . '_wpan_' . $key;
+	}
+
+	/**
+	 * User meta key for the dismissed flag.
+	 *
+	 * User meta is shared across the whole network on multisite, so the key is
+	 * scoped by blog ID to keep dismissal per-site. On single site the blog ID
+	 * is always 1.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @return string Blog-scoped dismissed key.
+	 */
+	private function dismissed_key() {
+		return $this->key( 'dismissed' ) . '_' . get_current_blog_id();
 	}
 }
